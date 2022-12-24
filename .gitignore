@@ -1,0 +1,5 @@
+/target
+/bak
+**/puzzles
+**/inputs/**
+!**/inputs/README.md
