@@ -1,5 +1,12 @@
 # My Advent of Code solutions, implemented in Rust
 
+## What is that?
+
+[Advent of Code](https://adventofcode.com/) is annual Advent calendar of small
+programming puzzles.
+
+## How do I run puzzle solutions?
+
 Each package in the workspace represents the set of puzzles for some year.
 Puzzle binaries are located at src/bin/ for each year's package. You need to
 provide the corresponding day's input file for each puzzle binary.

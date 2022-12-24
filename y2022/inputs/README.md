@@ -1,10 +1,8 @@
 # Where can I get the puzzle inputs?
 
-From Advent of Code website directly. Puzzle inputs are not licensed for
-reproduction or distribution. See the [legal notice](https://adventofcode.com/about)
-on adventofcode.com > About > Legal.
-For example, you can get day 1 puzzle input (2022) from: <https://adventofcode.com/2022/day/1/input>.
+See [README](../../README.md) to learn where to get puzzle texts and inputs from,
+and how to run puzzle solutions.
 
-You can add puzzle inputs in this directory with the format: day`day`, like: day01,
-day25, etc. By doing so, you can `cargo run` puzzle binaries without specifing the
-input paths. See [README](../../README.md) to learn how to run puzzles.
+You can add puzzle inputs into this directory with file names like this: day01,
+day09, day25, etc. By doing so, you can `cargo run` puzzle binaries without
+specifing input paths.
