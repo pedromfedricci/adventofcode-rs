@@ -42,7 +42,7 @@ impl FromStr for Sections {
         let mut bounds = s.trim().split(Self::DELIMETER);
         let start = bounds.next().ok_or(Self::Err::START)?.trim().parse()?;
         let end = bounds.next().ok_or(Self::Err::END)?.trim().parse()?;
-        let None = bounds.next() else { return Err(Self::Err::TRAILING) };
+        let None = bounds.next() else { return Err(Self::Err::Trailing) };
         Ok(Self { range: RangeInclusive::new(start, end) })
     }
 }
@@ -85,7 +85,7 @@ impl FromStr for SectionsPair {
         let mut sections = s.trim().split(Self::DELIMETER);
         let sec0 = sections.next().ok_or(Self::Err::FIRST)?.trim().parse()?;
         let sec1 = sections.next().ok_or(Self::Err::SECOND)?.trim().parse()?;
-        let None = sections.next() else { return Err(Self::Err::TRAILING) };
+        let None = sections.next() else { return Err(Self::Err::Trailing) };
         Ok(Self(sec0, sec1))
     }
 }
@@ -175,7 +175,7 @@ pub enum SectionsPairError {
     #[error(transparent)]
     Section(#[from] SectionsError),
     #[error("unexpected trailing sections' pair")]
-    Trailing(()),
+    Trailing,
     #[error(transparent)]
     Missing(MissingPair),
 }
@@ -183,7 +183,6 @@ pub enum SectionsPairError {
 impl SectionsPairError {
     const FIRST: Self = Self::Missing(MissingPair::First);
     const SECOND: Self = Self::Missing(MissingPair::Second);
-    const TRAILING: Self = Self::Trailing(());
 }
 
 #[derive(Debug, Copy, Clone, thiserror::Error)]
@@ -199,7 +198,7 @@ pub enum SectionsError {
     #[error(transparent)]
     Parse(#[from] ParseIntError),
     #[error("unexpected trailing sections' range")]
-    Trailing(()),
+    Trailing,
     #[error(transparent)]
     Missing(MissingSections),
 }
@@ -207,7 +206,6 @@ pub enum SectionsError {
 impl SectionsError {
     const START: Self = Self::Missing(MissingSections::Start);
     const END: Self = Self::Missing(MissingSections::End);
-    const TRAILING: Self = Self::Trailing(());
 }
 
 #[derive(Debug, Copy, Clone, thiserror::Error)]

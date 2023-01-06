@@ -294,17 +294,17 @@ pub struct GroupError {
 
 impl GroupError {
     fn empty(id: usize) -> Self {
-        let source = GroupErrorSource::Empty(());
+        let source = GroupErrorSource::Empty;
         Self { id, source }
     }
 
     fn missing(id: usize) -> Self {
-        let source = GroupErrorSource::Missing(());
+        let source = GroupErrorSource::Missing;
         Self { id, source }
     }
 
     fn too_many(id: usize) -> Self {
-        let source = GroupErrorSource::TooMany(());
+        let source = GroupErrorSource::TooMany;
         Self { id, source }
     }
 
@@ -317,11 +317,11 @@ impl GroupError {
 #[derive(Debug, thiserror::Error)]
 pub enum GroupErrorSource {
     #[error("group is missing it's badge")]
-    Missing(()),
+    Missing,
     #[error("group is empty")]
-    Empty(()),
+    Empty,
     #[error("group has more than one badge")]
-    TooMany(()),
+    TooMany,
     #[error(transparent)]
     Rucksack(#[from] RucksackError),
 }

@@ -50,7 +50,7 @@ impl<R: Read> ElvesReader<R> {
     fn split_first(mut self) -> Result<(Elf, <Self as IntoIterator>::IntoIter), ElfError> {
         let max = match self.next() {
             Some(elf) => elf?,
-            None => return Err(ElfError::NoEntries(())),
+            None => return Err(ElfError::NoEntries),
         };
         Ok((max, self))
     }
@@ -125,5 +125,5 @@ pub enum ElfError {
     #[error(transparent)]
     IO(#[from] io::Error),
     #[error("no calories listed in the file")]
-    NoEntries(()),
+    NoEntries,
 }
