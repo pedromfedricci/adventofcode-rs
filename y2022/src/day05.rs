@@ -1,10 +1,11 @@
-#![allow(dead_code)]
-use crate::{LineReader, LinesParse, LinesParseMap, ParseControlFlow};
+use crate::{LinePeeker, LinesParseIfOk, ParseControlFlow, PeekableLines};
 
 use std::{
     collections::{hash_map::Entry, HashMap},
+    fmt::{self, Debug, Formatter},
     fs::File,
     io::{self, BufReader, Lines, Read},
+    iter::{self, Peekable},
     marker::PhantomData,
     num::ParseIntError,
     ops::ControlFlow::{self, Break, Continue},
@@ -16,8 +17,14 @@ pub fn day05_file() -> io::Result<File> {
     super::input("day05")
 }
 
+pub fn drawing<R: Read>(input: R) -> (Platform, Lifts) {
+    let (platform, lines) = Platform::read(input);
+    let (lifts, _) = LiftPeeker::from(lines).lifts();
+    (platform, lifts)
+}
+
 #[derive(Debug, Copy, Clone)]
-struct Crate {
+pub struct Crate {
     value: char,
 }
 
@@ -28,11 +35,21 @@ impl Crate {
 
     const PREFIX_ERR: CrateParseError = CrateParseError::Prefix(Self::PREFIX);
     const SUFFIX_ERR: CrateParseError = CrateParseError::Suffix(Self::SUFFIX);
+
+    pub fn into_inner(self) -> char {
+        self.value
+    }
 }
 
 impl From<char> for Crate {
     fn from(value: char) -> Self {
         Self { value }
+    }
+}
+
+impl From<&Crate> for char {
+    fn from(krate: &Crate) -> Self {
+        krate.into_inner()
     }
 }
 
@@ -57,7 +74,10 @@ struct CrateRow {
 impl CrateRow {
     const CHUNK_LEN: usize = Crate::LEN + 1;
 
-    fn try_push(&mut self, chunk: impl IntoIterator<Item = char>) -> Result<(), CrateParseError> {
+    fn try_push<I>(&mut self, chunk: I) -> Result<(), CrateParseError>
+    where
+        I: IntoIterator<Item = char>,
+    {
         let slot = String::from_iter(chunk);
         let slot = slot.trim();
         match slot.is_empty() {
@@ -103,31 +123,32 @@ impl FromStr for CrateRow {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut this = Self::default();
         let mut chunks = s.chars().array_chunks::<{ Self::CHUNK_LEN }>();
-        for chunk in chunks.by_ref() {
-            this.try_push(chunk)?;
-        }
-        if let Some(remainder) = chunks.into_remainder() {
-            this.try_push(remainder)?;
-        }
+        chunks.by_ref().try_for_each(|chunk| this.try_push(chunk))?;
+        chunks.into_remainder().map_or(Ok(()), |rem| this.try_push(rem))?;
         Ok(this)
     }
 }
 
 #[derive(Debug)]
-struct CrateRowReader<R>(LineReader<R>);
+struct CrateRowPeeker<R: Read>(LinePeeker<R>);
 
-impl<R: Read> CrateRowReader<R> {
-    pub fn with_position(read: R, pos: usize) -> Self {
-        let reader = LineReader::with_position(read, pos);
-        Self(reader)
+impl<R: Read> CrateRowPeeker<R> {
+    pub fn into_inner(self) -> LinePeeker<R> {
+        self.0
     }
 
-    pub fn rows(self) -> Result<CrateRows, CrateRowReaderError> {
+    pub fn rows(self) -> (CrateRows, LinePeeker<R>) {
         CrateRows::new(self)
     }
 }
 
-impl<R> ParseControlFlow for CrateRowReader<R> {
+impl<R: Read> From<LinePeeker<R>> for CrateRowPeeker<R> {
+    fn from(peeker: LinePeeker<R>) -> Self {
+        Self(peeker)
+    }
+}
+
+impl<R: Read> ParseControlFlow for CrateRowPeeker<R> {
     type Item = CrateRow;
     type ParseError = CrateParseError;
 
@@ -141,12 +162,12 @@ impl<R> ParseControlFlow for CrateRowReader<R> {
     }
 }
 
-impl<R: Read> LinesParse for CrateRowReader<R> {
-    type Error = CrateRowReaderErrorSource;
-    type Lines = Lines<BufReader<R>>;
+impl<R: Read> LinesParseIfOk for CrateRowPeeker<R> {
+    type InnerIter = Lines<BufReader<R>>;
+    type Peekable<'s> = &'s mut Peekable<Self::InnerIter> where Self: 's;
 
-    fn lines(&mut self) -> &mut Self::Lines {
-        self.0.lines()
+    fn peekable(&mut self) -> Self::Peekable<'_> {
+        self.0.peekable()
     }
 
     fn every_line(&mut self) {
@@ -154,40 +175,31 @@ impl<R: Read> LinesParse for CrateRowReader<R> {
     }
 }
 
-impl<R: Read> LinesParseMap for CrateRowReader<R> {
-    type Result = Result<Self::Item, CrateRowReaderError>;
-
-    fn map(&self, res: Result<Self::Item, Self::Error>) -> Self::Result {
-        res.map_err(|err| CrateRowReaderError::new(self.0.pos(), err))
-    }
-}
-
-impl<R: Read> Iterator for CrateRowReader<R> {
-    type Item = Result<CrateRow, CrateRowReaderError>;
+impl<R: Read> Iterator for CrateRowPeeker<R> {
+    type Item = CrateRow;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.parse_next_map()
+        self.parse_next_if_ok()
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct CrateRows {
     rows: Vec<CrateRow>,
 }
 
 impl CrateRows {
-    fn new<R: Read>(reader: CrateRowReader<R>) -> Result<Self, CrateRowReaderError> {
-        let mut rows = Vec::new();
-        for row in reader {
-            rows.push(row?);
-        }
-        Ok(Self { rows })
+    fn new<R: Read>(mut peeker: CrateRowPeeker<R>) -> (CrateRows, LinePeeker<R>) {
+        let rows = (&mut peeker).collect();
+        let peeker = peeker.into_inner();
+        (Self { rows }, peeker)
     }
 }
 
 impl Iterator for CrateRows {
     type Item = CrateRow;
 
+    // Must iterate from the bottom of the platform up to the top.
     fn next(&mut self) -> Option<Self::Item> {
         self.rows.pop()
     }
@@ -199,25 +211,97 @@ struct Stack {
 }
 
 impl Stack {
-    fn push(&mut self, krate: Crate) {
+    pub fn push(&mut self, krate: Crate) {
         self.stack.push(krate);
     }
 
-    fn pop(&mut self) -> Option<Crate> {
-        self.stack.pop()
+    pub fn last(&self) -> Option<&'_ Crate> {
+        self.stack.last()
+    }
+
+    pub fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn lift(&mut self, start: usize) -> StackLift<'_> {
+        let drain = self.stack.drain(start..);
+        StackLift { drain }
+    }
+
+    pub fn lift_rev(&mut self, start: usize) -> StackLiftRev<'_> {
+        let rev = self.lift(start).rev();
+        StackLiftRev { rev }
+    }
+}
+
+impl Extend<Crate> for Stack {
+    fn extend<T: IntoIterator<Item = Crate>>(&mut self, iter: T) {
+        self.stack.extend(iter)
+    }
+}
+
+#[derive(Debug)]
+struct StackLift<'a> {
+    drain: vec::Drain<'a, Crate>,
+}
+
+impl Iterator for StackLift<'_> {
+    type Item = Crate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.drain.next()
+    }
+}
+
+impl DoubleEndedIterator for StackLift<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.drain.next_back()
+    }
+}
+
+#[derive(Debug)]
+struct StackLiftRev<'a> {
+    rev: iter::Rev<StackLift<'a>>,
+}
+
+impl<'a> Iterator for StackLiftRev<'a> {
+    type Item = Crate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rev.next()
+    }
+}
+
+impl DoubleEndedIterator for StackLiftRev<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.rev.next_back()
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-struct Unchecked;
+pub struct Unchecked;
 #[derive(Debug, Copy, Clone)]
-struct Checked;
+pub struct Checked;
 
-#[derive(Debug, Copy, Clone)]
-struct Route<C> {
+#[derive(Copy, Clone)]
+pub struct Route<C> {
     orig: usize,
     dest: usize,
     _pd: PhantomData<C>,
+}
+
+type RouteUnchecked = Route<Unchecked>;
+type RouteChecked = Route<Checked>;
+
+impl<C: Debug> Debug for Route<C> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use std::any::type_name;
+        f.debug_struct("Route")
+            .field("orig", &self.orig)
+            .field("dest", &self.dest)
+            .field("C", &type_name::<C>())
+            .finish()
+    }
 }
 
 impl<C> Route<C> {
@@ -238,8 +322,8 @@ impl<C> Route<C> {
     }
 }
 
-impl Route<Unchecked> {
-    fn check(self, layout: &StacksLayout) -> Result<Route<Checked>, RouteError> {
+impl RouteUnchecked {
+    fn check(self, layout: &Layout) -> Result<RouteChecked, RouteError> {
         let map = layout.map();
         let orig = *map.get(&self.orig).ok_or_else(|| self.orig_err())?;
         let dest = *map.get(&self.dest).ok_or_else(|| self.dest_err())?;
@@ -247,7 +331,7 @@ impl Route<Unchecked> {
     }
 }
 
-impl Route<Checked> {
+impl RouteChecked {
     pub fn orig(&self) -> usize {
         self.orig
     }
@@ -257,7 +341,7 @@ impl Route<Checked> {
     }
 }
 
-impl FromStr for Route<Unchecked> {
+impl FromStr for RouteUnchecked {
     type Err = RouteParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -270,20 +354,39 @@ impl FromStr for Route<Unchecked> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct Lift {
+pub struct Lift<C> {
     moves: usize,
-    route: Route<Unchecked>,
+    route: Route<C>,
 }
 
-impl Lift {
+type LiftUnchecked = Lift<Unchecked>;
+type LiftChecked = Lift<Checked>;
+
+impl<C> Lift<C> {
     const PREFIX: &str = "move ";
     const DELIM: char = ' ';
 
     const PREFIX_ERR: LiftParseError = LiftParseError::Prefix(Self::PREFIX);
     const DELIM_ERR: LiftParseError = LiftParseError::Delim(Self::DELIM);
+
+    pub fn moves(&self) -> usize {
+        self.moves
+    }
+
+    pub fn route(&self) -> &Route<C> {
+        &self.route
+    }
 }
 
-impl FromStr for Lift {
+impl LiftUnchecked {
+    fn check(self, layout: &Layout) -> Result<LiftChecked, RouteError> {
+        let route = self.route.check(layout)?;
+        let moves = self.moves;
+        Ok(Lift::<Checked> { route, moves })
+    }
+}
+
+impl FromStr for LiftUnchecked {
     type Err = LiftParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -296,26 +399,56 @@ impl FromStr for Lift {
 }
 
 #[derive(Debug)]
-pub struct LiftReader<R>(LineReader<R>);
+pub struct LiftPeeker<R: Read>(LinePeeker<R>);
 
-impl<R: Read> LiftReader<R> {
-    pub fn with_position(read: R, pos: usize) -> Self {
-        let reader = LineReader::with_position(read, pos);
-        Self(reader)
+impl<R: Read> LiftPeeker<R> {
+    fn into_inner(self) -> LinePeeker<R> {
+        self.0
+    }
+
+    fn lifts(self) -> (Lifts, LinePeeker<R>) {
+        Lifts::new(self)
     }
 }
 
-impl<R> ParseControlFlow for LiftReader<R> {
-    type Item = Lift;
+impl<R: Read> From<LinePeeker<R>> for LiftPeeker<R> {
+    fn from(peeker: LinePeeker<R>) -> Self {
+        Self(peeker)
+    }
+}
+
+#[derive(Debug)]
+pub struct Lifts {
+    lifts: vec::IntoIter<LiftUnchecked>,
+}
+
+impl Lifts {
+    fn new<R: Read>(mut peeker: LiftPeeker<R>) -> (Self, LinePeeker<R>) {
+        let lifts = (&mut peeker).collect::<Vec<_>>().into_iter();
+        let peeker = peeker.into_inner();
+        (Self { lifts }, peeker)
+    }
+}
+
+impl Iterator for Lifts {
+    type Item = LiftUnchecked;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.lifts.next()
+    }
+}
+
+impl<R: Read> ParseControlFlow for LiftPeeker<R> {
+    type Item = LiftUnchecked;
     type ParseError = LiftParseError;
 }
 
-impl<R: Read> LinesParse for LiftReader<R> {
-    type Error = LiftReaderErrorSource;
-    type Lines = Lines<BufReader<R>>;
+impl<R: Read> LinesParseIfOk for LiftPeeker<R> {
+    type InnerIter = Lines<BufReader<R>>;
+    type Peekable<'s> = &'s mut PeekableLines<R> where Self: 's;
 
-    fn lines(&mut self) -> &mut Self::Lines {
-        self.0.lines()
+    fn peekable(&mut self) -> Self::Peekable<'_> {
+        self.0.peekable()
     }
 
     fn every_line(&mut self) {
@@ -323,72 +456,118 @@ impl<R: Read> LinesParse for LiftReader<R> {
     }
 }
 
-impl<R: Read> LinesParseMap for LiftReader<R> {
-    type Result = Result<Self::Item, LiftReaderError>;
+impl<R: Read> Iterator for LiftPeeker<R> {
+    type Item = LiftUnchecked;
 
-    fn map(&self, res: Result<Self::Item, Self::Error>) -> Self::Result {
-        res.map_err(|err| LiftReaderError::new(self.0.pos(), err))
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parse_next_if_ok()
     }
 }
 
-impl<R: Read> Iterator for LiftReader<R> {
-    type Item = Result<Lift, LiftReaderError>;
+#[derive(Debug)]
+struct StackPairMut<'a> {
+    pub orig: &'a mut Stack,
+    pub dest: &'a mut Stack,
+}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.parse_next_map()
-    }
+struct LiftParams<'a> {
+    pub pair: StackPairMut<'a>,
+    pub pos: usize,
 }
 
 #[derive(Debug)]
 pub struct Platform {
     stacks: Vec<Stack>,
-    layout: StacksLayout,
+    layout: Layout,
 }
 
 impl Platform {
-    fn new(layout: StacksLayout) -> Self {
-        let len = layout.len();
-        let mut stacks = Vec::with_capacity(len);
-        for _ in 0..len {
-            stacks.push(Default::default());
-        }
+    pub fn read<R: Read>(read: R) -> (Self, LinePeeker<R>) {
+        let peeker = LinePeeker::new(read);
+        let (rows, peeker) = CrateRowPeeker::from(peeker).rows();
+        let (layout, peeker) = LayoutPeeker::from(peeker).layout();
+        let mut platform = Platform::new(layout);
+        platform.extend(rows);
+        (platform, peeker)
+    }
+
+    fn new(layout: Layout) -> Self {
+        let stacks = vec![Default::default(); layout.len()];
         Self { stacks, layout }
     }
 
-    fn insert_row(&mut self, row: CrateRow) {
+    fn stack_row(&mut self, row: CrateRow) {
         for (pos, krate) in row.into_iter().enumerate() {
-            if let Some(krate) = krate {
-                self.stacks[pos].push(krate);
-            }
+            krate.map_or((), |krate| self.stacks[pos].push(krate));
         }
     }
 
-    fn fill(&mut self, rows: impl IntoIterator<Item = CrateRow>) {
-        for row in rows {
-            self.insert_row(row)
-        }
+    fn get_stacks_mut(&mut self, route: &RouteChecked) -> StackPairMut<'_> {
+        let [orig, dest] = self
+            .stacks
+            .get_many_mut([route.orig(), route.dest()])
+            .expect("out-of-bounds route origin or destination");
+        StackPairMut { orig, dest }
     }
 
-    fn lift(&mut self, moves: usize, route: Route<Unchecked>) -> Result<(), RouteError> {
-        let route = route.check(&self.layout)?;
-        for _ in 0..moves {
-            // PANIC: route was checked prior to this point, so we have access
-            // to `orig` and `dest` APIs. Checked routes return bounded indexes.
-            match self.stacks[route.orig()].pop() {
-                Some(krate) => self.stacks[route.dest()].push(krate),
-                None => break,
-            }
-        }
+    fn lift_pos(&self, lift: &LiftChecked) -> usize {
+        self.stacks[lift.route().orig()].len() - lift.moves()
+    }
+
+    fn lift_check(&self, lift: LiftUnchecked) -> Result<LiftChecked, RouteError> {
+        lift.check(&self.layout)
+    }
+
+    fn lift_params(&mut self, lift: LiftUnchecked) -> Result<LiftParams<'_>, RouteError> {
+        let lift = self.lift_check(lift)?;
+        let pos = self.lift_pos(&lift);
+        let pair = self.get_stacks_mut(lift.route());
+        Ok(LiftParams { pair, pos })
+    }
+
+    fn lift_rev(&mut self, lift: LiftUnchecked) -> Result<(), RouteError> {
+        let LiftParams { pair, pos } = self.lift_params(lift)?;
+        pair.dest.extend(pair.orig.lift_rev(pos));
         Ok(())
+    }
+
+    pub fn try_lifts_rev(&mut self, mut lifts: Lifts) -> Result<(), RouteError> {
+        lifts.try_for_each(|lift| self.lift_rev(lift))
+    }
+
+    fn lift(&mut self, lift: LiftUnchecked) -> Result<(), RouteError> {
+        let LiftParams { pair, pos } = self.lift_params(lift)?;
+        pair.dest.extend(pair.orig.lift(pos));
+        Ok(())
+    }
+
+    pub fn try_lifts(&mut self, mut lifts: Lifts) -> Result<(), RouteError> {
+        lifts.try_for_each(|lift| self.lift(lift))
+    }
+
+    fn top_row(&self) -> impl Iterator<Item = Option<&'_ Crate>> {
+        self.stacks.iter().map(|stack| stack.last())
+    }
+
+    pub fn collect_top_row<I: FromIterator<char>>(&self) -> I {
+        let top_row = self.top_row();
+        let chars = top_row.map(|t| t.map(Into::into).unwrap_or(' '));
+        I::from_iter(chars)
+    }
+}
+
+impl Extend<CrateRow> for Platform {
+    fn extend<I: IntoIterator<Item = CrateRow>>(&mut self, iter: I) {
+        iter.into_iter().for_each(|row| self.stack_row(row));
     }
 }
 
 #[derive(Debug, Default)]
-struct StacksLayout {
+struct Layout {
     layout: HashMap<usize, usize>,
 }
 
-impl StacksLayout {
+impl Layout {
     pub fn len(&self) -> usize {
         self.layout.len()
     }
@@ -398,7 +577,7 @@ impl StacksLayout {
     }
 }
 
-impl FromStr for StacksLayout {
+impl FromStr for Layout {
     type Err = StacksLayoutParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -415,6 +594,53 @@ impl FromStr for StacksLayout {
     }
 }
 
+#[derive(Debug)]
+struct LayoutPeeker<R: Read>(LinePeeker<R>);
+
+impl<R: Read> LayoutPeeker<R> {
+    fn into_inner(self) -> LinePeeker<R> {
+        self.0
+    }
+
+    fn layout(mut self) -> (Layout, LinePeeker<R>) {
+        let layout = self.next().unwrap_or_default();
+        let peeker = self.into_inner();
+        (layout, peeker)
+    }
+}
+
+impl<R: Read> From<LinePeeker<R>> for LayoutPeeker<R> {
+    fn from(peeker: LinePeeker<R>) -> Self {
+        Self(peeker)
+    }
+}
+
+impl<R: Read> ParseControlFlow for LayoutPeeker<R> {
+    type Item = Layout;
+    type ParseError = StacksLayoutParseError;
+}
+
+impl<R: Read> LinesParseIfOk for LayoutPeeker<R> {
+    type InnerIter = Lines<BufReader<R>>;
+    type Peekable<'s> = &'s mut PeekableLines<R> where Self: 's;
+
+    fn peekable(&mut self) -> Self::Peekable<'_> {
+        self.0.peekable()
+    }
+
+    fn every_line(&mut self) {
+        self.0.advance_pos()
+    }
+}
+
+impl<R: Read> Iterator for LayoutPeeker<R> {
+    type Item = Layout;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parse_next_if_ok()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("error at line: {pos}, {source}")]
 pub struct CrateRowReaderError {
@@ -424,6 +650,7 @@ pub struct CrateRowReaderError {
 }
 
 impl CrateRowReaderError {
+    #[allow(dead_code)]
     fn new(pos: usize, source: CrateRowReaderErrorSource) -> Self {
         Self { pos, source }
     }
@@ -446,6 +673,7 @@ pub struct LiftReaderError {
 }
 
 impl LiftReaderError {
+    #[allow(dead_code)]
     fn new(pos: usize, source: LiftReaderErrorSource) -> Self {
         Self { pos, source }
     }
@@ -534,37 +762,48 @@ mod test {
     use super::*;
     use std::io::Cursor;
 
-    const STACKS: &str = "    [S] [C]         [Z]            
+    const SAMPLE: &str = "    [S] [C]         [Z]            
 [F] [J] [P]         [T]     [N]    
 [G] [H] [G] [Q]     [G]     [D]    
 [V] [V] [D] [G] [F] [D]     [V]    
 [R] [B] [F] [N] [N] [Q] [L] [S]    
 [J] [M] [M] [P] [H] [V] [B] [B] [D]
 [L] [P] [H] [D] [L] [F] [D] [J] [L]
-[D] [T] [V] [M] [J] [N] [F] [M] [G]";
+[D] [T] [V] [M] [J] [N] [F] [M] [G]
+ 1   2   3   4   5   6   7   8   9 
 
-    const LAYOUT: &str = " 1   2   3   4   5   6   7   8   9 ";
+move 3 from 4 to 6
+move 1 from 5 to 8
+move 3 from 7 to 3
+move 4 from 5 to 7
+move 1 from 7 to 8
+move 3 from 9 to 4
+move 2 from 8 to 2
+move 4 from 4 to 5
+move 2 from 5 to 1
+move 2 from 5 to 6
+move 7 from 8 to 1
+move 9 from 3 to 9
+move 11 from 6 to 5";
 
-    #[test]
-    fn read_rows() {
-        let input = Cursor::new(STACKS);
-        let rows = CrateRowReader::with_position(input, 0).rows().unwrap();
-        rows.for_each(|row| println!("{row:?}"));
+    fn test_drawing() -> (Platform, Lifts) {
+        let input = Cursor::new(SAMPLE);
+        drawing(input)
     }
 
     #[test]
-    fn read_layout() {
-        let layout = StacksLayout::from_str(LAYOUT).unwrap();
-        println!("{layout:?}");
+    fn solve_sample_lift1() {
+        let (mut platform, lifts) = test_drawing();
+        platform.try_lifts_rev(lifts).unwrap();
+        let answer = platform.collect_top_row::<String>();
+        assert_eq!("MFHDVFL M", answer);
     }
 
     #[test]
-    fn read_platform() {
-        let input = Cursor::new(STACKS);
-        let rows = CrateRowReader::with_position(input, 0).rows().unwrap();
-        let layout = StacksLayout::from_str(LAYOUT).unwrap();
-        let mut platform = Platform::new(layout);
-        platform.fill(rows);
-        println!("{platform:#?}");
+    fn solve_sample_lift2() {
+        let (mut platform, lifts) = test_drawing();
+        platform.try_lifts(lifts).unwrap();
+        let answer = platform.collect_top_row::<String>();
+        assert_eq!("NNHDGFH L", answer);
     }
 }
