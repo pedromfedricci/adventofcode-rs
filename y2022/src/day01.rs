@@ -1,4 +1,4 @@
-use itertools::Itertools;
+use crate::LineReader;
 
 use std::{
     cmp,
@@ -7,8 +7,6 @@ use std::{
     num::ParseIntError,
     ops::ControlFlow::{self, Break, Continue},
 };
-
-use crate::LineReader;
 
 pub type Calories = u64;
 
@@ -56,6 +54,7 @@ impl<R: Read> ElvesReader<R> {
     }
 
     pub fn sum_top(self, n: usize) -> Result<Calories, ElfError> {
+        use itertools::Itertools;
         let ordered = self
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -69,9 +68,9 @@ impl<R: Read> Iterator for ElvesReader<R> {
     type Item = Result<Elf, ElfError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut parser = CaloriesParser::default();
+        let mut parser = CalControlFlow::default();
         loop {
-            let err = match self.0.lines.next()? {
+            let err = match self.0.lines().next()? {
                 Ok(ref line) => match parser.parse(line) {
                     Continue(_) => continue,
                     Break(Ok(_)) => break,
@@ -81,18 +80,18 @@ impl<R: Read> Iterator for ElvesReader<R> {
             };
             return Some(err);
         }
-        self.0.pos += 1;
+        self.0.advance_pos();
         Some(Ok(Elf::new(self.0.pos(), parser.cals())))
     }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct CaloriesParser {
+struct CalControlFlow {
     filled: bool,
     cals: Calories,
 }
 
-impl CaloriesParser {
+impl CalControlFlow {
     fn parse(&mut self, s: &str) -> ControlFlow<Result<(), ParseIntError>, ()> {
         let s = s.trim();
         let (prev, curr) = (self.filled, !s.is_empty());

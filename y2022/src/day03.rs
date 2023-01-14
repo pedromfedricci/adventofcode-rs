@@ -178,9 +178,9 @@ impl<R> ParseControlFlow for RucksackReader<R> {
 
 impl<R: Read> LinesParse for RucksackReader<R> {
     type Error = RucksackErrorSource;
-    type Lines = Lines<BufReader<R>>;
+    type Lines<'s> = &'s mut Lines<BufReader<R>> where Self: 's;
 
-    fn lines(&mut self) -> &mut Self::Lines {
+    fn lines(&mut self) -> Self::Lines<'_> {
         self.0.lines()
     }
 

@@ -53,28 +53,12 @@ pub struct SectionsPair(Sections, Sections);
 impl SectionsPair {
     const DELIMETER: char = ',';
 
-    fn fcontains(&self) -> bool {
-        self.0.contains(&self.1)
-    }
-
-    fn rcontains(&self) -> bool {
-        self.1.contains(&self.0)
-    }
-
     pub fn contains(&self) -> bool {
-        self.fcontains() || self.rcontains()
-    }
-
-    fn foverlaps(&self) -> bool {
-        self.0.overlaps(&self.1)
-    }
-
-    fn roverlaps(&self) -> bool {
-        self.1.overlaps(&self.0)
+        self.0.contains(&self.1) || self.1.contains(&self.0)
     }
 
     pub fn overlaps(&self) -> bool {
-        self.foverlaps() || self.roverlaps()
+        self.0.overlaps(&self.1) || self.1.overlaps(&self.0)
     }
 }
 
@@ -129,9 +113,9 @@ impl<R> ParseControlFlow for SectionsPairReader<R> {
 
 impl<R: Read> LinesParse for SectionsPairReader<R> {
     type Error = PairReadErrorSource;
-    type Lines = Lines<BufReader<R>>;
+    type Lines<'s> = &'s mut Lines<BufReader<R>> where Self: 's;
 
-    fn lines(&mut self) -> &mut Self::Lines {
+    fn lines(&mut self) -> Self::Lines<'_> {
         self.0.lines()
     }
 

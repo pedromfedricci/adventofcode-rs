@@ -454,9 +454,9 @@ impl<R> ParseControlFlow for RowReader<R> {
 
 impl<R: Read> LinesParse for RowReader<R> {
     type Error = RowErrorSource;
-    type Lines = Lines<BufReader<R>>;
+    type Lines<'s> = &'s mut Lines<BufReader<R>> where Self: 's;
 
-    fn lines(&mut self) -> &mut Self::Lines {
+    fn lines(&mut self) -> Self::Lines<'_> {
         self.0.lines()
     }
 
