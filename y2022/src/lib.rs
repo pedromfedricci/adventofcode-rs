@@ -1,6 +1,7 @@
 #![feature(iter_array_chunks)]
 #![feature(iterator_try_collect)]
 #![feature(get_many_mut)]
+#![feature(array_windows)]
 
 use std::{
     env,
@@ -45,7 +46,7 @@ pub trait LinesParseMap: LinesParse {
 
 pub trait LinesParse: ParseControlFlow {
     type Error: From<io::Error> + From<Self::ParseError>;
-    type Lines<'s>: Iterator<Item = Result<String, io::Error>>
+    type Lines<'s>: Iterator<Item = io::Result<String>>
     where
         Self: 's;
 
@@ -91,7 +92,7 @@ pub trait LinesParseIfOk: ParseControlFlow {
                 },
                 Err(_) => return None,
             };
-            let _ = self.peekable().deref_mut().next();
+            self.peekable().deref_mut().next();
             if let Break(item) = flow { return item }
         }
     }
@@ -199,3 +200,4 @@ pub mod day02;
 pub mod day03;
 pub mod day04;
 pub mod day05;
+pub mod day06;
